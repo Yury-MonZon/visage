@@ -69,6 +69,9 @@ enum EngineRequest {
         threshold: f32,
         frames_count: usize,
         timeout: std::time::Duration,
+        /// How long to keep capturing while no face has been seen. Zero means
+        /// a single burst. See `Config::face_wait`.
+        face_wait: std::time::Duration,
         liveness_enabled: bool,
         liveness_min_displacement: f32,
         reply: oneshot::Sender<Result<VerifyResult, EngineError>>,
@@ -158,12 +161,14 @@ impl EngineHandle {
     }
 
     /// Request verification: capture frames, detect, extract, compare against gallery.
+    #[allow(clippy::too_many_arguments)]
     pub async fn verify(
         &self,
         gallery: Vec<FaceModel>,
         threshold: f32,
         frames_count: usize,
         timeout: std::time::Duration,
+        face_wait: std::time::Duration,
         liveness_enabled: bool,
         liveness_min_displacement: f32,
     ) -> Result<VerifyResult, EngineError> {
@@ -174,6 +179,7 @@ impl EngineHandle {
                 threshold,
                 frames_count,
                 timeout,
+                face_wait,
                 liveness_enabled,
                 liveness_min_displacement,
                 reply: reply_tx,
@@ -295,6 +301,7 @@ pub fn spawn_engine(
                         threshold,
                         frames_count,
                         timeout,
+                        face_wait,
                         liveness_enabled,
                         liveness_min_displacement,
                         reply,
@@ -309,6 +316,7 @@ pub fn spawn_engine(
                             threshold,
                             frames_count,
                             deadline,
+                            face_wait,
                             liveness_enabled,
                             liveness_min_displacement,
                         );
@@ -546,6 +554,9 @@ struct VerifyTiming {
     extract_n: usize,
     frames: usize,
     dark_skipped: usize,
+    /// Capture bursts taken. More than one only when the face-wait window
+    /// sent the verify back for another look.
+    bursts: usize,
 }
 
 impl VerifyTiming {
@@ -559,6 +570,7 @@ impl VerifyTiming {
             extract_n: 0,
             frames: 0,
             dark_skipped: 0,
+            bursts: 0,
         }
     }
 }
@@ -577,14 +589,41 @@ impl Drop for VerifyTiming {
             other_ms = other.as_millis() as u64,
             frames = self.frames,
             dark_skipped = self.dark_skipped,
+            bursts = self.bursts,
             "verify timing"
         );
     }
 }
 
+/// True when a verify burst saw nothing to judge: no face in any frame, or no
+/// usable frame at all. Only these send a verify back for another burst inside
+/// the face-wait window.
+///
+/// Never a match or a non-match: a face that was seen and rejected must not get
+/// further attempts within the same request, or one verify would turn into
+/// several tries against the gallery and sidestep the rate limiter, which
+/// counts requests. Never a camera error either: those go to the self-heal path.
+fn nothing_seen_yet<T>(result: &Result<T, EngineError>) -> bool {
+    matches!(
+        result,
+        Err(EngineError::NoFaceDetected) | Err(EngineError::NoUsableFrames)
+    )
+}
+
+/// What one capture burst produced, before the liveness gate.
+struct BurstResult {
+    result: MatchResult,
+    best_quality: f32,
+    landmark_sequence: Vec<[(f32, f32); 5]>,
+}
+
+/// Capture, detect, extract and compare, retrying for up to `face_wait` while
+/// no face has been seen, then apply the liveness gate.
+///
 /// When `liveness_enabled` is true, collects eye landmarks across all frames
-/// and runs a passive stability check before accepting a match. Static images
-/// (photographs) produce near-identical landmarks and are rejected.
+/// of the deciding burst and runs a passive stability check before accepting a
+/// match. Static images (photographs) produce near-identical landmarks and are
+/// rejected.
 #[allow(clippy::too_many_arguments)]
 fn run_verify(
     camera: &Camera,
@@ -595,19 +634,101 @@ fn run_verify(
     threshold: f32,
     frames_count: usize,
     deadline: std::time::Instant,
+    face_wait: std::time::Duration,
     liveness_enabled: bool,
     liveness_min_displacement: f32,
 ) -> Result<VerifyResult, EngineError> {
     let mut timing = VerifyTiming::start();
+    let face_deadline = std::cmp::min(timing.start + face_wait, deadline);
 
+    let burst = loop {
+        let attempt = run_verify_burst(
+            camera,
+            emitter,
+            detector,
+            recognizer,
+            gallery,
+            threshold,
+            frames_count,
+            deadline,
+            &mut timing,
+        );
+        if nothing_seen_yet(&attempt) && std::time::Instant::now() < face_deadline {
+            tracing::debug!(
+                bursts = timing.bursts,
+                "verify: nothing seen yet, capturing again"
+            );
+            continue;
+        }
+        break attempt?;
+    };
+
+    let BurstResult {
+        result,
+        best_quality,
+        landmark_sequence,
+    } = burst;
+
+    // --- Passive liveness check ---
+    // Run after detection loop so we always have full landmark data.
+    // Only gates the result when a match would otherwise succeed. The check
+    // fails closed: fewer than 2 landmark frames yields `is_live = false`
+    // (rejected), so a spoof that produces only a single detectable landmark
+    // frame cannot slip past liveness by starving it of evidence.
+    if liveness_enabled && result.matched {
+        let liveness =
+            check_landmark_stability(&landmark_sequence, Some(liveness_min_displacement));
+
+        tracing::debug!(
+            is_live = liveness.is_live,
+            mean_eye_displacement = liveness.mean_eye_displacement,
+            frame_pairs = liveness.frame_pairs_analysed,
+            threshold = liveness_min_displacement,
+            "liveness check"
+        );
+
+        if !liveness.is_live {
+            tracing::warn!(
+                similarity = result.similarity,
+                displacement = liveness.mean_eye_displacement,
+                "liveness rejected a face that matched identity — possible spoof attempt"
+            );
+            return Err(EngineError::LivenessCheckFailed {
+                displacement: liveness.mean_eye_displacement,
+                threshold: liveness_min_displacement,
+            });
+        }
+    }
+
+    Ok(VerifyResult {
+        result,
+        best_quality,
+    })
+}
+
+/// One capture burst: capture frames, detect faces, extract embeddings and
+/// compare against the gallery. Uses the best match across the burst's frames.
+#[allow(clippy::too_many_arguments)]
+fn run_verify_burst(
+    camera: &Camera,
+    emitter: &Option<IrEmitter>,
+    detector: &mut visage_core::FaceDetector,
+    recognizer: &mut visage_core::FaceRecognizer,
+    gallery: &[FaceModel],
+    threshold: f32,
+    frames_count: usize,
+    deadline: std::time::Instant,
+    timing: &mut VerifyTiming,
+) -> Result<BurstResult, EngineError> {
     if std::time::Instant::now() > deadline {
         return Err(EngineError::VerifyTimeout);
     }
 
+    timing.bursts += 1;
     activate_emitter(emitter);
     let t_capture = std::time::Instant::now();
     let capture_result = camera.capture_frames(frames_count);
-    timing.capture = t_capture.elapsed();
+    timing.capture += t_capture.elapsed();
     deactivate_emitter(emitter);
 
     if std::time::Instant::now() > deadline {
@@ -615,8 +736,8 @@ fn run_verify(
     }
 
     let (frames, dark_skipped) = capture_result?;
-    timing.frames = frames.len();
-    timing.dark_skipped = dark_skipped;
+    timing.frames += frames.len();
+    timing.dark_skipped += dark_skipped;
     tracing::debug!(
         captured = frames.len(),
         dark_skipped,
@@ -680,40 +801,10 @@ fn run_verify(
         model_label: None,
     });
 
-    // --- Passive liveness check ---
-    // Run after detection loop so we always have full landmark data.
-    // Only gates the result when a match would otherwise succeed. The check
-    // fails closed: fewer than 2 landmark frames yields `is_live = false`
-    // (rejected), so a spoof that produces only a single detectable landmark
-    // frame cannot slip past liveness by starving it of evidence.
-    if liveness_enabled && result.matched {
-        let liveness =
-            check_landmark_stability(&landmark_sequence, Some(liveness_min_displacement));
-
-        tracing::debug!(
-            is_live = liveness.is_live,
-            mean_eye_displacement = liveness.mean_eye_displacement,
-            frame_pairs = liveness.frame_pairs_analysed,
-            threshold = liveness_min_displacement,
-            "liveness check"
-        );
-
-        if !liveness.is_live {
-            tracing::warn!(
-                similarity = result.similarity,
-                displacement = liveness.mean_eye_displacement,
-                "liveness rejected a face that matched identity — possible spoof attempt"
-            );
-            return Err(EngineError::LivenessCheckFailed {
-                displacement: liveness.mean_eye_displacement,
-                threshold: liveness_min_displacement,
-            });
-        }
-    }
-
-    Ok(VerifyResult {
+    Ok(BurstResult {
         result,
         best_quality,
+        landmark_sequence,
     })
 }
 
@@ -779,6 +870,29 @@ mod tests {
             }
         )));
         assert!(!capture_looks_broken::<()>(&Ok(())));
+    }
+
+    /// The face-wait window may only retry a burst that saw nothing. A face that
+    /// was seen and rejected must end the verify: retrying it would hand one
+    /// request several attempts against the gallery, which the per-request
+    /// rate limiter would never see.
+    #[test]
+    fn face_wait_retries_only_when_nothing_was_seen() {
+        // Nothing to judge → retry while the window lasts.
+        assert!(nothing_seen_yet::<()>(&Err(EngineError::NoFaceDetected)));
+        assert!(nothing_seen_yet::<()>(&Err(EngineError::NoUsableFrames)));
+        // A decision, or a failure that is not about the user → never retry.
+        assert!(!nothing_seen_yet::<()>(&Ok(())));
+        assert!(!nothing_seen_yet::<()>(&Err(EngineError::VerifyTimeout)));
+        assert!(!nothing_seen_yet::<()>(&Err(EngineError::Camera(
+            visage_hw::CameraError::DeviceBusy
+        ))));
+        assert!(!nothing_seen_yet::<()>(&Err(
+            EngineError::LivenessCheckFailed {
+                displacement: 0.0,
+                threshold: 1.0,
+            }
+        )));
     }
 }
 

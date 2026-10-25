@@ -12,6 +12,19 @@ pub struct Config {
     pub similarity_threshold: f32,
     /// Timeout in seconds for a verify operation.
     pub verify_timeout_secs: u64,
+    /// How long a verify keeps capturing while no face has been seen yet.
+    ///
+    /// A verify starts the moment authentication is requested, which is often
+    /// before the user is in front of the camera: the lid is still opening, or
+    /// the sensor is still dark after resume. With a window set, a burst that
+    /// sees no face (or only dark frames) is followed by another until the
+    /// window or the verify timeout runs out. A burst that finds a face ends
+    /// the verify as before, matched or not.
+    ///
+    /// Zero (the default) keeps the single-burst behaviour. Keep it below the
+    /// client's D-Bus timeout (`pam_visage.so timeout=N`, default 3 s): once
+    /// the client has given up, further bursts only keep the camera busy.
+    pub face_wait: std::time::Duration,
     /// Number of warmup frames to discard at startup (camera AGC/AE stabilization).
     pub warmup_frames: usize,
     /// Number of frames to capture per verify attempt.
@@ -63,6 +76,7 @@ impl Config {
             db_path,
             similarity_threshold: env_f32("VISAGE_SIMILARITY_THRESHOLD", 0.40),
             verify_timeout_secs: env_u64("VISAGE_VERIFY_TIMEOUT_SECS", 10),
+            face_wait: std::time::Duration::from_millis(env_u64("VISAGE_FACE_WAIT_MS", 0)),
             warmup_frames: env_usize("VISAGE_WARMUP_FRAMES", 4),
             frames_per_verify: env_usize("VISAGE_FRAMES_PER_VERIFY", 3),
             frames_per_enroll: env_usize("VISAGE_FRAMES_PER_ENROLL", 5),

@@ -4,6 +4,23 @@
 
 ### Added
 
+- **`VISAGE_FACE_WAIT_MS`: keep looking for a face instead of giving up after one burst.**
+  A verify starts the moment authentication is requested, which is often before the
+  user is in front of the camera: the lid is still opening, or the sensor is still
+  dark after resume. Until now that verify took one 3-frame burst, found no face and
+  failed, and the user got the password prompt while looking straight at the camera.
+
+  With a window set, a burst that sees no face (or only dark frames) is followed by
+  another until the window or the verify timeout runs out. A burst that **finds** a
+  face ends the verify exactly as before, matched or not: the window never turns one
+  request into several attempts against the gallery, which the per-request rate
+  limiter would not see.
+
+  Default `0` keeps the single-burst behaviour. Keep the window below the client's
+  D-Bus timeout (`pam_visage.so timeout=N`, default 3 s); once PAM has given up,
+  further bursts only keep the camera busy. Also `services.visage.faceWaitMs` on
+  NixOS, `face_wait_ms` in `visage status`, and `bursts` in the verify timing line.
+
 - **A framing phase before each enrollment capture.** The user gets a moment to see
   themselves and get centred before anything is captured, instead of being told to
   look at a lens and hoping.

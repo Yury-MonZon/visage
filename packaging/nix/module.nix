@@ -169,6 +169,27 @@ in
       '';
     };
 
+    faceWaitMs = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.unsigned;
+      default = null;
+      example = 2500;
+      description = ''
+        How long, in milliseconds, a verification keeps capturing while no
+        face has been seen yet. When null, the daemon uses its compiled
+        default (0, a single capture burst).
+
+        Authentication often starts before the user is in front of the
+        camera: the lid is still opening, or the sensor is still dark after
+        resume. With a window set, a burst that sees no face is followed by
+        another until the window runs out. A burst that finds a face ends
+        the verification, matched or not, so this never adds attempts
+        against an enrolled face.
+
+        Keep it below the client's D-Bus timeout: `pam-visage` gives up
+        after 3 seconds unless `pam_visage.so timeout=N` raises it.
+      '';
+    };
+
     emitter.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -303,6 +324,8 @@ in
         VISAGE_FRAMING_MS = toString cfg.framingMs;
       } // lib.optionalAttrs (cfg.verifyTimeoutSeconds != null) {
         VISAGE_VERIFY_TIMEOUT_SECS = toString cfg.verifyTimeoutSeconds;
+      } // lib.optionalAttrs (cfg.faceWaitMs != null) {
+        VISAGE_FACE_WAIT_MS = toString cfg.faceWaitMs;
       } // lib.optionalAttrs (!cfg.emitter.enable) {
         VISAGE_EMITTER_ENABLED = "0";
       };
