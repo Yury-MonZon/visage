@@ -627,6 +627,34 @@ fn whole_verify_reason<T>(
     }
 }
 
+/// How much of a frame the verify loop still needs.
+#[derive(Debug, PartialEq, Eq)]
+enum FrameWork {
+    /// Detect, extract and compare.
+    Full,
+    /// Detect only: the liveness check needs this frame's landmarks, but the
+    /// identity decision is already made.
+    LandmarksOnly,
+    /// Nothing: the decision is made and nothing else reads the frame.
+    None,
+}
+
+/// Once one frame has matched, the verify's outcome is a match whatever the
+/// remaining frames hold: the result is matched if any frame matched. Their
+/// ArcFace extractions can only change the reported similarity, never the
+/// decision, so they are skipped. That was two of three extractions per
+/// successful verify at the default `frames_per_verify=3`.
+///
+/// The liveness check is the exception for detection only: it needs landmarks
+/// from every frame, and starving it of frames would make it fail closed.
+fn frame_work(matched: bool, liveness_enabled: bool) -> FrameWork {
+    match (matched, liveness_enabled) {
+        (false, _) => FrameWork::Full,
+        (true, true) => FrameWork::LandmarksOnly,
+        (true, false) => FrameWork::None,
+    }
+}
+
 /// What one capture burst produced, before the liveness gate.
 struct BurstResult {
     result: MatchResult,
@@ -668,6 +696,7 @@ fn run_verify(
             threshold,
             frames_count,
             deadline,
+            liveness_enabled,
             &mut timing,
         );
         if nothing_seen_yet(&attempt) && std::time::Instant::now() < face_deadline {
@@ -735,6 +764,7 @@ fn run_verify_burst(
     threshold: f32,
     frames_count: usize,
     deadline: std::time::Instant,
+    liveness_enabled: bool,
     timing: &mut VerifyTiming,
 ) -> Result<BurstResult, EngineError> {
     if std::time::Instant::now() > deadline {
@@ -772,6 +802,12 @@ fn run_verify_burst(
     let mut landmark_sequence: Vec<[(f32, f32); 5]> = Vec::new();
 
     for frame in &frames {
+        let matched = best_result.as_ref().is_some_and(|r| r.matched);
+        let work = frame_work(matched, liveness_enabled);
+        if work == FrameWork::None {
+            break;
+        }
+
         let t_detect = std::time::Instant::now();
         let faces = detector.detect(&frame.data, frame.width, frame.height)?;
         timing.detect += t_detect.elapsed();
@@ -786,10 +822,10 @@ fn run_verify_burst(
             landmark_sequence.push(landmarks);
         }
 
-        // NOTE: this runs on EVERY frame while only the best result survives.
-        // With frames_per_verify=3 that is three ArcFace extractions per auth,
-        // two of them discarded. `extract_n` in the timing line makes the waste
-        // visible in production rather than only in a code review.
+        if work == FrameWork::LandmarksOnly {
+            continue;
+        }
+
         let t_extract = std::time::Instant::now();
         let embedding = recognizer.extract(&frame.data, frame.width, frame.height, face)?;
         timing.extract += t_extract.elapsed();
@@ -907,6 +943,20 @@ mod tests {
             whole_verify_reason::<()>(Err(EngineError::VerifyTimeout), 6),
             Err(EngineError::VerifyTimeout)
         ));
+    }
+
+    /// Skipping work after a match must never skip work the decision or the
+    /// liveness gate depends on.
+    #[test]
+    fn frames_after_a_match_skip_only_what_cannot_change_the_outcome() {
+        // No match yet: every frame gets the full pipeline, with or without liveness.
+        assert_eq!(frame_work(false, false), FrameWork::Full);
+        assert_eq!(frame_work(false, true), FrameWork::Full);
+        // Matched with liveness on: keep detecting, the check needs every
+        // frame's landmarks and fails closed without them.
+        assert_eq!(frame_work(true, true), FrameWork::LandmarksOnly);
+        // Matched with liveness off: nothing reads the remaining frames.
+        assert_eq!(frame_work(true, false), FrameWork::None);
     }
 
     /// The face-wait window may only retry a burst that saw nothing. A face that
