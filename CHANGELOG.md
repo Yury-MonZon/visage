@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`VISAGE_REJECTED_DIR`: keep the faces that failed to authenticate.** Off by
+  default. When set, every verify that saw a face and matched no enrolled model stores
+  the frame that was judged as a grayscale PNG named
+  `<UTC time>_<user>_<similarity>.png`, so the owner can see who tried to unlock their
+  machine. Verifies that saw no face store nothing. The files are biometric captures of
+  whoever was in front of the camera: directory `0700`, files `0600`, and only the
+  newest `VISAGE_REJECTED_KEEP` (default 100) are kept. Also
+  `services.visage.rejectedFaces.{dir,keep}` on NixOS and `rejected_dir` in
+  `visage status`.
+
 - **`VISAGE_FACE_WAIT_MS`: keep looking for a face instead of giving up after one burst.**
   A verify starts the moment authentication is requested, which is often before the
   user is in front of the camera: the lid is still opening, or the sensor is still

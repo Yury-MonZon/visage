@@ -28,6 +28,7 @@ chrono = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 nix = { workspace = true, features = ["user"] }
+image = { workspace = true }
 
 [package.metadata.deb]
 name = "visage"

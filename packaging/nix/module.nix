@@ -190,6 +190,31 @@ in
       '';
     };
 
+    rejectedFaces.dir = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/var/lib/visage/rejected";
+      description = ''
+        Keep the face from every verification that saw a face and matched no
+        enrolled model, as a grayscale PNG, so you can see who tried to
+        authenticate as you. When null (the default) nothing is kept.
+
+        These are biometric captures of whoever stood in front of the camera:
+        the directory is created 0700 and files 0600, owned by root. It must
+        be writable by the service, i.e. under /var/lib/visage.
+      '';
+    };
+
+    rejectedFaces.keep = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      example = 100;
+      description = ''
+        How many rejected faces to keep; older ones are deleted. When null,
+        the daemon uses its compiled default (100).
+      '';
+    };
+
     emitter.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -326,6 +351,10 @@ in
         VISAGE_VERIFY_TIMEOUT_SECS = toString cfg.verifyTimeoutSeconds;
       } // lib.optionalAttrs (cfg.faceWaitMs != null) {
         VISAGE_FACE_WAIT_MS = toString cfg.faceWaitMs;
+      } // lib.optionalAttrs (cfg.rejectedFaces.dir != null) {
+        VISAGE_REJECTED_DIR = cfg.rejectedFaces.dir;
+      } // lib.optionalAttrs (cfg.rejectedFaces.keep != null) {
+        VISAGE_REJECTED_KEEP = toString cfg.rejectedFaces.keep;
       } // lib.optionalAttrs (!cfg.emitter.enable) {
         VISAGE_EMITTER_ENABLED = "0";
       };

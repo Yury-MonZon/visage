@@ -45,6 +45,10 @@ pub struct Config {
     /// Lower values are more permissive; higher values reject more aggressively.
     /// Only used when `liveness_enabled` is true.
     pub liveness_min_displacement: f32,
+    /// Where faces that were seen and rejected are kept (`VISAGE_REJECTED_DIR`,
+    /// off when unset or empty) and how many (`VISAGE_REJECTED_KEEP`, default
+    /// 100). See `rejected.rs`.
+    pub rejected_faces: Option<crate::rejected::RejectedFaces>,
     /// Whether the daemon is running on the session bus (development mode).
     /// UID validation is skipped on the session bus — all callers share the same user.
     pub session_bus: bool,
@@ -91,6 +95,13 @@ impl Config {
                 .map(|v| v != "0")
                 .unwrap_or(true),
             liveness_min_displacement: env_f32("VISAGE_LIVENESS_MIN_DISPLACEMENT", 0.8),
+            rejected_faces: std::env::var("VISAGE_REJECTED_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
+                .map(|dir| crate::rejected::RejectedFaces {
+                    dir: PathBuf::from(dir),
+                    keep: env_usize("VISAGE_REJECTED_KEEP", 100).max(1),
+                }),
             session_bus: parse_session_bus(std::env::var("VISAGE_SESSION_BUS").ok().as_deref()),
         }
     }

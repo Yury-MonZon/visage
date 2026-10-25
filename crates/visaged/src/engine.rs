@@ -48,6 +48,9 @@ pub struct EnrollResult {
 /// Result of a verification operation.
 pub struct VerifyResult {
     pub result: MatchResult,
+    /// The frame whose face was judged, when a face was seen and matched no
+    /// enrolled model. `None` for a match.
+    pub rejected_frame: Option<visage_hw::Frame>,
     /// Reserved for v3: surface capture quality metadata to callers without a schema change.
     #[allow(dead_code)]
     pub best_quality: f32,
@@ -752,6 +755,8 @@ impl FrameGroups {
 struct Evidence {
     best: Option<MatchResult>,
     best_quality: f32,
+    /// The frame `best` came from.
+    best_frame: Option<visage_hw::Frame>,
     landmark_sequence: Vec<[(f32, f32); 5]>,
 }
 
@@ -800,6 +805,7 @@ fn examine_frame(
         if is_better {
             evidence.best_quality = face.confidence;
             evidence.best = Some(result);
+            evidence.best_frame = Some(frame.clone());
         }
     }
 
@@ -941,8 +947,14 @@ fn run_verify(
         }
     }
 
+    let rejected_frame = if result.matched {
+        None
+    } else {
+        evidence.best_frame
+    };
     Ok(VerifyResult {
         result,
+        rejected_frame,
         best_quality: evidence.best_quality,
     })
 }
