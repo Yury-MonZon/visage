@@ -99,6 +99,22 @@
 
 ### Changed
 
+- **A verify examines frames as they arrive, on one camera stream.** Every capture
+  burst used to open a new V4L2 stream and wait for all of its frames before examining
+  any. Starting the stream is most of a capture on UVC IR modules: ~320 ms from
+  `STREAMON` to the first frame on a Syntek `174f:118f`, against ~35 ms between frames.
+  A verify now runs one stream for its whole length, including the face-wait window,
+  and stops at the first frame that settles it. On a ThinkPad X12 a verify in view went
+  from ~400 to ~335 ms, and the face-wait window examines a frame every ~40 ms instead
+  of restarting the camera for every burst. The decision rules are unchanged; a burst is
+  now a group of `frames_per_verify` usable frames within the stream (`bursts` in the
+  timing line counts groups). `Camera::stream_frames` is the new entry point; the
+  capture loop's observer may now end it early.
+
+  "No usable frames" is reported only when every frame of the verify was dark, so a
+  verify that saw frames and then went dark no longer counts toward the camera
+  self-heal.
+
 - **A successful verify no longer runs ArcFace on frames after the first match.** The
   outcome is a match if any frame matches, so once one has, the remaining frames'
   extractions can only change the reported similarity, never the decision. That was
