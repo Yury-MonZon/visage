@@ -205,6 +205,37 @@ in
       '';
     };
 
+    rejectedFaces.photo.camera = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:4:1.0-video-index0";
+      description = ''
+        A regular (colour) webcam to take a photo with right after each
+        rejected face, saved next to it as <name>_rgb.jpg: the camera's own
+        JPEG, never re-encoded. When null (the default) no photo is taken.
+        Needs rejectedFaces.dir. The webcam's light turns on briefly.
+      '';
+    };
+
+    rejectedFaces.photo.size = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "2592x1944";
+      description = ''
+        Photo size, one the camera offers as MJPEG. When null, 1920x1080.
+      '';
+    };
+
+    rejectedFaces.photo.delayMs = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.unsigned;
+      default = null;
+      example = 1000;
+      description = ''
+        How long the webcam streams before the photo, so auto-exposure has
+        adjusted. When null, 1000.
+      '';
+    };
+
     rejectedFaces.keep = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
       default = null;
@@ -355,6 +386,12 @@ in
         VISAGE_REJECTED_DIR = cfg.rejectedFaces.dir;
       } // lib.optionalAttrs (cfg.rejectedFaces.keep != null) {
         VISAGE_REJECTED_KEEP = toString cfg.rejectedFaces.keep;
+      } // lib.optionalAttrs (cfg.rejectedFaces.photo.camera != null) {
+        VISAGE_REJECTED_PHOTO_CAMERA = cfg.rejectedFaces.photo.camera;
+      } // lib.optionalAttrs (cfg.rejectedFaces.photo.size != null) {
+        VISAGE_REJECTED_PHOTO_SIZE = cfg.rejectedFaces.photo.size;
+      } // lib.optionalAttrs (cfg.rejectedFaces.photo.delayMs != null) {
+        VISAGE_REJECTED_PHOTO_DELAY_MS = toString cfg.rejectedFaces.photo.delayMs;
       } // lib.optionalAttrs (!cfg.emitter.enable) {
         VISAGE_EMITTER_ENABLED = "0";
       };

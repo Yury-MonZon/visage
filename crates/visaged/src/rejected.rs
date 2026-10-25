@@ -5,10 +5,15 @@
 //! the model judged (grayscale PNG), so the owner can see who tried to
 //! authenticate as them. Verifies that saw no face store nothing.
 //!
+//! Optionally (`VISAGE_REJECTED_PHOTO_CAMERA`) a colour photo from a regular
+//! webcam is taken right after, as `<same name>_rgb.jpg`: the IR frame shows
+//! who was judged, the colour photo shows the person and the scene as people
+//! see them, and whoever tried is most likely still in front of the screen.
+//!
 //! These are biometric captures of whoever stood in front of the camera, so the
 //! directory is created `0700` and every file `0600`, owned by the daemon's
 //! user (root for the packaged service), and only the newest `keep` files are
-//! retained.
+//! retained (a colour photo goes with its IR frame).
 
 use image::ImageEncoder;
 use std::io::Write;
@@ -20,6 +25,26 @@ use std::path::{Path, PathBuf};
 pub struct RejectedFaces {
     pub dir: PathBuf,
     pub keep: usize,
+    /// A colour photo with each rejected face, or `None`.
+    pub photo: Option<ColourPhoto>,
+}
+
+/// The webcam for the colour photo and how to take it.
+#[derive(Debug, Clone)]
+pub struct ColourPhoto {
+    pub camera: String,
+    pub width: u32,
+    pub height: u32,
+    /// How long to stream before the photo, so auto-exposure has adjusted.
+    pub settle: std::time::Duration,
+}
+
+/// The colour photo that belongs to a rejected face's PNG.
+pub fn photo_path(png: &Path) -> PathBuf {
+    png.with_file_name(format!(
+        "{}_rgb.jpg",
+        png.file_stem().unwrap_or_default().to_string_lossy()
+    ))
 }
 
 impl RejectedFaces {
@@ -62,6 +87,24 @@ impl RejectedFaces {
         prune(&self.dir, self.keep)?;
         Ok(path)
     }
+
+    /// Take the colour photo for the rejected face saved at `png`, if configured.
+    /// Returns the path written, or `None` when no photo is configured.
+    pub fn save_photo(&self, png: &Path) -> std::io::Result<Option<PathBuf>> {
+        let Some(photo) = &self.photo else {
+            return Ok(None);
+        };
+        let jpeg = visage_hw::capture_jpeg(&photo.camera, photo.width, photo.height, photo.settle)
+            .map_err(std::io::Error::other)?;
+        let path = photo_path(png);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(&jpeg)?;
+        Ok(Some(path))
+    }
 }
 
 /// `<UTC time>_<user>_<similarity>.png`. The user name is reduced to
@@ -81,8 +124,8 @@ fn file_name(timestamp: &str, user: &str, similarity: f32) -> String {
     format!("{timestamp}_{user}_{similarity:.2}.png")
 }
 
-/// Delete the oldest `.png` files beyond `keep`. Names start with the UTC time,
-/// so name order is age order.
+/// Delete the oldest `.png` files beyond `keep`, each with its colour photo.
+/// Names start with the UTC time, so name order is age order.
 fn prune(dir: &Path, keep: usize) -> std::io::Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -92,6 +135,10 @@ fn prune(dir: &Path, keep: usize) -> std::io::Result<()> {
     let excess = files.len().saturating_sub(keep);
     for old in &files[..excess] {
         std::fs::remove_file(old)?;
+        match std::fs::remove_file(photo_path(old)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -139,6 +186,7 @@ mod tests {
         let r = RejectedFaces {
             dir: dir.clone(),
             keep: 10,
+            photo: None,
         };
         let path = r.save(&frame(), "monzon", 0.21).unwrap();
 
@@ -153,10 +201,17 @@ mod tests {
     }
 
     #[test]
-    fn only_the_newest_files_are_kept() {
+    fn only_the_newest_files_are_kept_each_with_its_photo() {
         let dir = tmp_dir("prune");
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["2026a.png", "2026b.png", "2026c.png", "notes.txt"] {
+        for name in [
+            "2026a.png",
+            "2026a_rgb.jpg",
+            "2026b.png",
+            "2026b_rgb.jpg",
+            "2026c.png",
+            "notes.txt",
+        ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
         prune(&dir, 2).unwrap();
@@ -165,7 +220,31 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         left.sort();
-        assert_eq!(left, ["2026b.png", "2026c.png", "notes.txt"]);
+        assert_eq!(
+            left,
+            ["2026b.png", "2026b_rgb.jpg", "2026c.png", "notes.txt"]
+        );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_photo_is_named_after_its_face() {
+        assert_eq!(
+            photo_path(Path::new("/r/20261025T145520.020Z_monzon_0.21.png")),
+            Path::new("/r/20261025T145520.020Z_monzon_0.21_rgb.jpg")
+        );
+    }
+
+    #[test]
+    fn without_a_camera_no_photo_is_taken() {
+        let r = RejectedFaces {
+            dir: PathBuf::from("/nonexistent"),
+            keep: 1,
+            photo: None,
+        };
+        assert!(r
+            .save_photo(Path::new("/nonexistent/x.png"))
+            .unwrap()
+            .is_none());
     }
 }

@@ -14,6 +14,15 @@
   `services.visage.rejectedFaces.{dir,keep}` on NixOS and `rejected_dir` in
   `visage status`.
 
+  With `VISAGE_REJECTED_PHOTO_CAMERA` set to a colour webcam, a photo is also taken right
+  after each rejected face and saved next to it as `<name>_rgb.jpg`: the camera's own JPEG
+  (MJPEG, `VISAGE_REJECTED_PHOTO_SIZE`, default 1920x1080) after
+  `VISAGE_REJECTED_PHOTO_DELAY_MS` (default 1000) of auto-exposure. The IR frame shows who
+  was judged; the colour photo shows the person and the scene as people see them, while
+  whoever tried is most likely still in front of the screen. It is taken in the background
+  and never delays the answer to PAM. Off by default; the webcam light turns on briefly.
+  Also `services.visage.rejectedFaces.photo.{camera,size,delayMs}` on NixOS.
+
 - **`VISAGE_FACE_WAIT_MS`: keep looking for a face instead of giving up after one burst.**
   A verify starts the moment authentication is requested, which is often before the
   user is in front of the camera: the lid is still opening, or the sensor is still

@@ -47,7 +47,9 @@ pub struct Config {
     pub liveness_min_displacement: f32,
     /// Where faces that were seen and rejected are kept (`VISAGE_REJECTED_DIR`,
     /// off when unset or empty) and how many (`VISAGE_REJECTED_KEEP`, default
-    /// 100). See `rejected.rs`.
+    /// 100), and the optional colour photo with each (`VISAGE_REJECTED_PHOTO_CAMERA`,
+    /// off when unset or empty; `VISAGE_REJECTED_PHOTO_SIZE`, default 1920x1080;
+    /// `VISAGE_REJECTED_PHOTO_DELAY_MS`, default 1000). See `rejected.rs`.
     pub rejected_faces: Option<crate::rejected::RejectedFaces>,
     /// Whether the daemon is running on the session bus (development mode).
     /// UID validation is skipped on the session bus — all callers share the same user.
@@ -101,6 +103,23 @@ impl Config {
                 .map(|dir| crate::rejected::RejectedFaces {
                     dir: PathBuf::from(dir),
                     keep: env_usize("VISAGE_REJECTED_KEEP", 100).max(1),
+                    photo: std::env::var("VISAGE_REJECTED_PHOTO_CAMERA")
+                        .ok()
+                        .filter(|c| !c.is_empty())
+                        .map(|camera| {
+                            let (width, height) = parse_size(
+                                std::env::var("VISAGE_REJECTED_PHOTO_SIZE").ok().as_deref(),
+                            );
+                            crate::rejected::ColourPhoto {
+                                camera,
+                                width,
+                                height,
+                                settle: std::time::Duration::from_millis(env_u64(
+                                    "VISAGE_REJECTED_PHOTO_DELAY_MS",
+                                    1000,
+                                )),
+                            }
+                        }),
                 }),
             session_bus: parse_session_bus(std::env::var("VISAGE_SESSION_BUS").ok().as_deref()),
         }
@@ -144,6 +163,16 @@ fn env_usize(key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Parse `VISAGE_REJECTED_PHOTO_SIZE` ("1920x1080"). Unset or malformed means
+/// 1920x1080: a typo must not stop the daemon, which would lock users out.
+fn parse_size(value: Option<&str>) -> (u32, u32) {
+    value
+        .and_then(|v| v.trim().split_once(['x', 'X']))
+        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+        .filter(|&(w, h): &(u32, u32)| w > 0 && h > 0)
+        .unwrap_or((1920, 1080))
+}
+
 /// Parse the `VISAGE_SESSION_BUS` value into the session-bus flag.
 ///
 /// Security-sensitive: session-bus mode *skips* D-Bus caller-UID validation
@@ -162,7 +191,16 @@ fn parse_session_bus(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_session_bus;
+    use super::{parse_session_bus, parse_size};
+
+    #[test]
+    fn photo_size_parses_and_falls_back_on_nonsense() {
+        assert_eq!(parse_size(Some("2592x1944")), (2592, 1944));
+        assert_eq!(parse_size(Some(" 1280X720 ")), (1280, 720));
+        assert_eq!(parse_size(None), (1920, 1080));
+        assert_eq!(parse_size(Some("big")), (1920, 1080));
+        assert_eq!(parse_size(Some("0x720")), (1920, 1080));
+    }
 
     #[test]
     fn session_bus_defaults_off_and_respects_zero() {

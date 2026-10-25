@@ -376,11 +376,23 @@ impl VisageService {
             let frame = frame.clone();
             let user_owned = user.to_string();
             let similarity = result.result.similarity;
-            match tokio::task::spawn_blocking(move || store.save(&frame, &user_owned, similarity))
+            let saver = store.clone();
+            match tokio::task::spawn_blocking(move || saver.save(&frame, &user_owned, similarity))
                 .await
             {
                 Ok(Ok(path)) => {
-                    tracing::warn!(user, path = %path.display(), "verify: rejected face saved")
+                    tracing::warn!(user, path = %path.display(), "verify: rejected face saved");
+                    // The colour photo takes about a second (auto-exposure), so it is
+                    // not awaited: the verify answers PAM now, the photo follows.
+                    if store.photo.is_some() {
+                        tokio::task::spawn_blocking(move || match store.save_photo(&path) {
+                            Ok(Some(p)) => {
+                                tracing::warn!(path = %p.display(), "verify: colour photo saved")
+                            }
+                            Ok(None) => {}
+                            Err(e) => tracing::error!(error = %e, "verify: colour photo failed"),
+                        });
+                    }
                 }
                 Ok(Err(e)) => tracing::error!(error = %e, "verify: saving rejected face failed"),
                 Err(e) => tracing::error!(error = %e, "verify: saving rejected face panicked"),

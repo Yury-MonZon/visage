@@ -371,6 +371,9 @@ Environment=VARIABLE=value
 | `VISAGE_LIVENESS_MIN_DISPLACEMENT` | `0.8` | Minimum eye landmark displacement (px) for liveness check |
 | `VISAGE_REJECTED_DIR` | unset | Keep the face of every verify that saw a face and matched no one, as a grayscale PNG (dir `0700`, files `0600`, root). Must be under `/var/lib/visage` for the packaged service. Unset = keep nothing |
 | `VISAGE_REJECTED_KEEP` | `100` | How many rejected faces to keep; the oldest are deleted |
+| `VISAGE_REJECTED_PHOTO_CAMERA` | unset | A colour webcam: with each rejected face also take a photo, `<name>_rgb.jpg` (the camera's own JPEG). Unset = no photo. Needs `VISAGE_REJECTED_DIR`; the webcam light turns on briefly |
+| `VISAGE_REJECTED_PHOTO_SIZE` | `1920x1080` | Photo size, an MJPEG size the camera offers |
+| `VISAGE_REJECTED_PHOTO_DELAY_MS` | `1000` | Streaming time before the photo, for auto-exposure |
 | `VISAGE_SESSION_BUS` | unset | Set to `1` to use session bus (development only) |
 
 ### Tuning the similarity threshold
