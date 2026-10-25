@@ -610,6 +610,23 @@ fn nothing_seen_yet<T>(result: &Result<T, EngineError>) -> bool {
     )
 }
 
+/// The reason a verify gives up with describes the whole verify, not its last
+/// burst.
+///
+/// With a face-wait window, a verify can see usable frames in one burst and
+/// only dark ones in the last (lens covered, lid closing). That verify found
+/// no face. Reporting "no usable frames" would make it look like a broken
+/// camera, which three times in a row makes the engine re-open the device.
+fn whole_verify_reason<T>(
+    result: Result<T, EngineError>,
+    usable_frames: usize,
+) -> Result<T, EngineError> {
+    match result {
+        Err(EngineError::NoUsableFrames) if usable_frames > 0 => Err(EngineError::NoFaceDetected),
+        other => other,
+    }
+}
+
 /// What one capture burst produced, before the liveness gate.
 struct BurstResult {
     result: MatchResult,
@@ -660,7 +677,7 @@ fn run_verify(
             );
             continue;
         }
-        break attempt?;
+        break whole_verify_reason(attempt, timing.frames)?;
     };
 
     let BurstResult {
@@ -870,6 +887,26 @@ mod tests {
             }
         )));
         assert!(!capture_looks_broken::<()>(&Ok(())));
+    }
+
+    #[test]
+    fn a_verify_that_saw_usable_frames_is_not_a_broken_camera() {
+        // Usable frames in an earlier burst, a dark last burst: no face.
+        assert!(matches!(
+            whole_verify_reason::<()>(Err(EngineError::NoUsableFrames), 6),
+            Err(EngineError::NoFaceDetected)
+        ));
+        // Dark from start to end: the camera may really be broken.
+        assert!(matches!(
+            whole_verify_reason::<()>(Err(EngineError::NoUsableFrames), 0),
+            Err(EngineError::NoUsableFrames)
+        ));
+        // Everything else passes through unchanged.
+        assert!(whole_verify_reason::<()>(Ok(()), 0).is_ok());
+        assert!(matches!(
+            whole_verify_reason::<()>(Err(EngineError::VerifyTimeout), 6),
+            Err(EngineError::VerifyTimeout)
+        ));
     }
 
     /// The face-wait window may only retry a burst that saw nothing. A face that
