@@ -13,7 +13,12 @@
 //! These are biometric captures of whoever stood in front of the camera, so the
 //! directory is created `0700` and every file `0600`, owned by the daemon's
 //! user (root for the packaged service), and only the newest `keep` files are
-//! retained (a colour photo goes with its IR frame).
+//! retained (a colour photo goes with its IR frame; `keep` 0 keeps all).
+//!
+//! To let one user see them without copying, `group_readable` writes the files
+//! `0640`. The group comes from the directory: create it setgid for that group
+//! (`2750 root:<group>`, e.g. with systemd-tmpfiles), since the sandboxed
+//! daemon has no capability to change a file's group itself.
 
 use image::ImageEncoder;
 use std::io::Write;
@@ -24,7 +29,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct RejectedFaces {
     pub dir: PathBuf,
+    /// How many faces to keep, newest first; 0 keeps all.
     pub keep: usize,
+    /// Write the files `0640` instead of `0600`, for the directory's group.
+    pub group_readable: bool,
     /// A colour photo with each rejected face, or `None`.
     pub photo: Option<ColourPhoto>,
 }
@@ -80,12 +88,20 @@ impl RejectedFaces {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(self.file_mode())
             .open(&path)?;
         file.write_all(&png)?;
 
         prune(&self.dir, self.keep)?;
         Ok(path)
+    }
+
+    fn file_mode(&self) -> u32 {
+        if self.group_readable {
+            0o640
+        } else {
+            0o600
+        }
     }
 
     /// Take the colour photo for the rejected face saved at `png`, if configured.
@@ -100,7 +116,7 @@ impl RejectedFaces {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(self.file_mode())
             .open(&path)?;
         file.write_all(&jpeg)?;
         Ok(Some(path))
@@ -124,9 +140,13 @@ fn file_name(timestamp: &str, user: &str, similarity: f32) -> String {
     format!("{timestamp}_{user}_{similarity:.2}.png")
 }
 
-/// Delete the oldest `.png` files beyond `keep`, each with its colour photo.
-/// Names start with the UTC time, so name order is age order.
+/// Delete the oldest `.png` files beyond `keep`, each with its colour photo;
+/// `keep` 0 deletes nothing. Names start with the UTC time, so name order is
+/// age order.
 fn prune(dir: &Path, keep: usize) -> std::io::Result<()> {
+    if keep == 0 {
+        return Ok(());
+    }
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "png"))
@@ -186,6 +206,7 @@ mod tests {
         let r = RejectedFaces {
             dir: dir.clone(),
             keep: 10,
+            group_readable: false,
             photo: None,
         };
         let path = r.save(&frame(), "monzon", 0.21).unwrap();
@@ -228,6 +249,38 @@ mod tests {
     }
 
     #[test]
+    fn keep_zero_keeps_everything() {
+        let dir = tmp_dir("keepall");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["2026a.png", "2026b.png", "2026c.png"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        prune(&dir, 0).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Group-readable is opt-in: by default nobody but the daemon's user may
+    /// read a stranger's face.
+    #[test]
+    fn group_readable_only_when_asked() {
+        let dir = tmp_dir("group");
+        let mut r = RejectedFaces {
+            dir: dir.clone(),
+            keep: 10,
+            group_readable: true,
+            photo: None,
+        };
+        let shared = r.save(&frame(), "monzon", 0.2).unwrap();
+        r.group_readable = false;
+        let private = r.save(&frame(), "monzon", 0.3).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&shared), 0o640);
+        assert_eq!(mode(&private), 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn the_photo_is_named_after_its_face() {
         assert_eq!(
             photo_path(Path::new("/r/20261025T145520.020Z_monzon_0.21.png")),
@@ -240,6 +293,7 @@ mod tests {
         let r = RejectedFaces {
             dir: PathBuf::from("/nonexistent"),
             keep: 1,
+            group_readable: false,
             photo: None,
         };
         assert!(r

@@ -10,7 +10,7 @@
   `<UTC time>_<user>_<similarity>.png`, so the owner can see who tried to unlock their
   machine. Verifies that saw no face store nothing. The files are biometric captures of
   whoever was in front of the camera: directory `0700`, files `0600`, and only the
-  newest `VISAGE_REJECTED_KEEP` (default 100) are kept. Also
+  newest `VISAGE_REJECTED_KEEP` (default 1024) are kept. Also
   `services.visage.rejectedFaces.{dir,keep}` on NixOS and `rejected_dir` in
   `visage status`.
 
@@ -22,6 +22,11 @@
   whoever tried is most likely still in front of the screen. It is taken in the background
   and never delays the answer to PAM. Off by default; the webcam light turns on briefly.
   Also `services.visage.rejectedFaces.photo.{camera,size,delayMs}` on NixOS.
+
+  `VISAGE_REJECTED_KEEP=0` keeps every rejected face. `VISAGE_REJECTED_GROUP_READABLE=1`
+  writes them `0640` so the owner can read them in place, through the group of a setgid
+  directory (`2750 root:<group>`, e.g. from systemd-tmpfiles); the sandboxed daemon has no
+  capability to change a file's group itself. Also `rejectedFaces.groupReadable` on NixOS.
 
 - **`VISAGE_FACE_WAIT_MS`: keep looking for a face instead of giving up after one burst.**
   A verify starts the moment authentication is requested, which is often before the

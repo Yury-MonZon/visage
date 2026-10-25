@@ -236,13 +236,24 @@ in
       '';
     };
 
+    rejectedFaces.groupReadable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Write the rejected faces 0640 instead of 0600, so the group of
+        rejectedFaces.dir can read them. Give the directory to that group
+        with the setgid bit (2750 root:<group>, e.g. systemd.tmpfiles.rules):
+        the sandboxed daemon cannot change a file's group itself.
+      '';
+    };
+
     rejectedFaces.keep = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
       default = null;
-      example = 100;
+      example = 1024;
       description = ''
-        How many rejected faces to keep; older ones are deleted. When null,
-        the daemon uses its compiled default (100).
+        How many rejected faces to keep; older ones are deleted, 0 keeps all.
+        When null, the daemon uses its compiled default (1024).
       '';
     };
 
@@ -386,6 +397,8 @@ in
         VISAGE_REJECTED_DIR = cfg.rejectedFaces.dir;
       } // lib.optionalAttrs (cfg.rejectedFaces.keep != null) {
         VISAGE_REJECTED_KEEP = toString cfg.rejectedFaces.keep;
+      } // lib.optionalAttrs cfg.rejectedFaces.groupReadable {
+        VISAGE_REJECTED_GROUP_READABLE = "1";
       } // lib.optionalAttrs (cfg.rejectedFaces.photo.camera != null) {
         VISAGE_REJECTED_PHOTO_CAMERA = cfg.rejectedFaces.photo.camera;
       } // lib.optionalAttrs (cfg.rejectedFaces.photo.size != null) {

@@ -47,7 +47,8 @@ pub struct Config {
     pub liveness_min_displacement: f32,
     /// Where faces that were seen and rejected are kept (`VISAGE_REJECTED_DIR`,
     /// off when unset or empty) and how many (`VISAGE_REJECTED_KEEP`, default
-    /// 100), and the optional colour photo with each (`VISAGE_REJECTED_PHOTO_CAMERA`,
+    /// 1024; 0 keeps all), whether they are group-readable
+    /// (`VISAGE_REJECTED_GROUP_READABLE`), and the optional colour photo with each (`VISAGE_REJECTED_PHOTO_CAMERA`,
     /// off when unset or empty; `VISAGE_REJECTED_PHOTO_SIZE`, default 1920x1080;
     /// `VISAGE_REJECTED_PHOTO_DELAY_MS`, default 1000). See `rejected.rs`.
     pub rejected_faces: Option<crate::rejected::RejectedFaces>,
@@ -102,7 +103,9 @@ impl Config {
                 .filter(|d| !d.is_empty())
                 .map(|dir| crate::rejected::RejectedFaces {
                     dir: PathBuf::from(dir),
-                    keep: env_usize("VISAGE_REJECTED_KEEP", 100).max(1),
+                    keep: env_usize("VISAGE_REJECTED_KEEP", 1024),
+                    group_readable: std::env::var("VISAGE_REJECTED_GROUP_READABLE")
+                        .is_ok_and(|v| !v.is_empty() && v != "0"),
                     photo: std::env::var("VISAGE_REJECTED_PHOTO_CAMERA")
                         .ok()
                         .filter(|c| !c.is_empty())
