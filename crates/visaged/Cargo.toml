@@ -19,6 +19,8 @@ visage-hw = { path = "../visage-hw" }
 visage-models = { path = "../visage-models" }
 tokio = { workspace = true }
 zbus = { workspace = true }
+# Already in the tree through zbus; for reading its signal streams.
+futures-lite = "2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }

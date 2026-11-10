@@ -76,6 +76,8 @@ enum EngineRequest {
         /// How long to keep looking while no face has been seen. Zero means
         /// one group of frames. See `Config::face_wait`.
         face_wait: std::time::Duration,
+        /// How far to turn each frame before examining it.
+        rotation: crate::orientation::Rotation,
         liveness_enabled: bool,
         liveness_min_displacement: f32,
         reply: oneshot::Sender<Result<VerifyResult, EngineError>>,
@@ -173,6 +175,7 @@ impl EngineHandle {
         frames_count: usize,
         timeout: std::time::Duration,
         face_wait: std::time::Duration,
+        rotation: crate::orientation::Rotation,
         liveness_enabled: bool,
         liveness_min_displacement: f32,
     ) -> Result<VerifyResult, EngineError> {
@@ -184,6 +187,7 @@ impl EngineHandle {
                 frames_count,
                 timeout,
                 face_wait,
+                rotation,
                 liveness_enabled,
                 liveness_min_displacement,
                 reply: reply_tx,
@@ -307,6 +311,7 @@ pub fn spawn_engine(
                         frames_count,
                         timeout,
                         face_wait,
+                        rotation,
                         liveness_enabled,
                         liveness_min_displacement,
                         reply,
@@ -322,6 +327,7 @@ pub fn spawn_engine(
                             frames_count,
                             deadline,
                             face_wait,
+                            rotation,
                             liveness_enabled,
                             liveness_min_displacement,
                         );
@@ -562,6 +568,8 @@ struct VerifyTiming {
     /// Groups of frames looked at. More than one only when the face-wait
     /// window kept the verify looking.
     bursts: usize,
+    /// Degrees each frame was turned before it was examined.
+    rotation_deg: u32,
 }
 
 impl VerifyTiming {
@@ -576,6 +584,7 @@ impl VerifyTiming {
             frames: 0,
             dark_skipped: 0,
             bursts: 0,
+            rotation_deg: 0,
         }
     }
 }
@@ -595,6 +604,7 @@ impl Drop for VerifyTiming {
             frames = self.frames,
             dark_skipped = self.dark_skipped,
             bursts = self.bursts,
+            rotation_deg = self.rotation_deg,
             "verify timing"
         );
     }
@@ -891,10 +901,12 @@ fn run_verify(
     frames_count: usize,
     deadline: std::time::Instant,
     face_wait: std::time::Duration,
+    rotation: crate::orientation::Rotation,
     liveness_enabled: bool,
     liveness_min_displacement: f32,
 ) -> Result<VerifyResult, EngineError> {
     let mut timing = VerifyTiming::start();
+    timing.rotation_deg = rotation.degrees();
 
     if std::time::Instant::now() > deadline {
         return Err(EngineError::VerifyTimeout);
@@ -927,6 +939,16 @@ fn run_verify(
             FrameSeen::Dark
         } else {
             timing.frames += 1;
+            // Turned upright before anything reads it, so detection, the
+            // embedding, the liveness landmarks and a kept rejected frame
+            // all see the face the right way up.
+            let upright;
+            let frame = if rotation == crate::orientation::Rotation::None {
+                frame
+            } else {
+                upright = crate::orientation::rotate_frame(frame, rotation);
+                &upright
+            };
             match examine_frame(
                 frame,
                 budget.work(),
