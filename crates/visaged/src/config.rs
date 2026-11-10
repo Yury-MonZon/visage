@@ -52,6 +52,13 @@ pub struct Config {
     /// `gpu`), `VISAGE_CPU_THREADS`, and `VISAGE_INFERENCE_CACHE_DIR` for
     /// compiled GPU kernels.
     pub inference: visage_core::InferenceOptions,
+    /// Where faces that were seen and rejected are kept (`VISAGE_REJECTED_DIR`,
+    /// off when unset or empty) and how many (`VISAGE_REJECTED_KEEP`, default
+    /// 1024; 0 keeps all), whether they are group-readable
+    /// (`VISAGE_REJECTED_GROUP_READABLE`), and the optional colour photo with each (`VISAGE_REJECTED_PHOTO_CAMERA`,
+    /// off when unset or empty; `VISAGE_REJECTED_PHOTO_SIZE`, default 1920x1080;
+    /// `VISAGE_REJECTED_PHOTO_DELAY_MS`, default 1000). See `rejected.rs`.
+    pub rejected_faces: Option<crate::rejected::RejectedFaces>,
     /// Whether the daemon is running on the session bus (development mode).
     /// UID validation is skipped on the session bus — all callers share the same user.
     pub session_bus: bool,
@@ -107,6 +114,32 @@ impl Config {
                 ),
             },
             model_dir,
+            rejected_faces: std::env::var("VISAGE_REJECTED_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
+                .map(|dir| crate::rejected::RejectedFaces {
+                    dir: PathBuf::from(dir),
+                    keep: env_usize("VISAGE_REJECTED_KEEP", 1024),
+                    group_readable: std::env::var("VISAGE_REJECTED_GROUP_READABLE")
+                        .is_ok_and(|v| !v.is_empty() && v != "0"),
+                    photo: std::env::var("VISAGE_REJECTED_PHOTO_CAMERA")
+                        .ok()
+                        .filter(|c| !c.is_empty())
+                        .map(|camera| {
+                            let (width, height) = parse_size(
+                                std::env::var("VISAGE_REJECTED_PHOTO_SIZE").ok().as_deref(),
+                            );
+                            crate::rejected::ColourPhoto {
+                                camera,
+                                width,
+                                height,
+                                settle: std::time::Duration::from_millis(env_u64(
+                                    "VISAGE_REJECTED_PHOTO_DELAY_MS",
+                                    1000,
+                                )),
+                            }
+                        }),
+                }),
             session_bus: parse_session_bus(std::env::var("VISAGE_SESSION_BUS").ok().as_deref()),
         }
     }
@@ -171,6 +204,16 @@ fn default_inference_cache_dir(model_dir: &std::path::Path) -> PathBuf {
     model_dir.parent().unwrap_or(model_dir).join("gpu-cache")
 }
 
+/// Parse `VISAGE_REJECTED_PHOTO_SIZE` ("1920x1080"). Unset or malformed means
+/// 1920x1080: a typo must not stop the daemon, which would lock users out.
+fn parse_size(value: Option<&str>) -> (u32, u32) {
+    value
+        .and_then(|v| v.trim().split_once(['x', 'X']))
+        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+        .filter(|&(w, h): &(u32, u32)| w > 0 && h > 0)
+        .unwrap_or((1920, 1080))
+}
+
 /// Parse the `VISAGE_SESSION_BUS` value into the session-bus flag.
 ///
 /// Security-sensitive: session-bus mode *skips* D-Bus caller-UID validation
@@ -189,7 +232,7 @@ fn parse_session_bus(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_inference_cache_dir, parse_device, parse_session_bus};
+    use super::{default_inference_cache_dir, parse_device, parse_session_bus, parse_size};
     use std::path::Path;
     use visage_core::Device;
 
@@ -211,6 +254,15 @@ mod tests {
             default_inference_cache_dir(Path::new("/var/lib/visage/models")),
             Path::new("/var/lib/visage/gpu-cache")
         );
+    }
+
+    #[test]
+    fn photo_size_parses_and_falls_back_on_nonsense() {
+        assert_eq!(parse_size(Some("2592x1944")), (2592, 1944));
+        assert_eq!(parse_size(Some(" 1280X720 ")), (1280, 720));
+        assert_eq!(parse_size(None), (1920, 1080));
+        assert_eq!(parse_size(Some("big")), (1920, 1080));
+        assert_eq!(parse_size(Some("0x720")), (1920, 1080));
     }
 
     #[test]

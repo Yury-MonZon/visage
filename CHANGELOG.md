@@ -104,6 +104,35 @@
   from a new verify every ~618 ms (3 frames each, ~4.9 frames/s examined) to one verify
   examining ~26.5 frames/s, so a face should be noticed within about one frame instead
   of up to ~0.55 s later.
+- **`VISAGE_REJECTED_DIR`: keep the faces that failed to authenticate.** Off by
+  default. When set, every verify that saw a face and matched no enrolled model stores
+  the frame that was judged as a grayscale PNG named
+  `<UTC time>_<user>_<similarity>.png`, so the owner can see who tried to unlock their
+  machine. Verifies that saw no face store nothing. The files are biometric captures of
+  whoever was in front of the camera: directory `0700`, files `0600`, and only the
+  newest `VISAGE_REJECTED_KEEP` (default 1024) are kept. Also
+  `services.visage.rejectedFaces.{dir,keep}` on NixOS and `rejected_dir` in
+  `visage status`.
+
+  With `VISAGE_REJECTED_PHOTO_CAMERA` set to a colour webcam, a photo is also taken right
+  after each rejected face and saved next to it as `<name>_rgb.jpg`: the camera's own JPEG
+  (MJPEG, `VISAGE_REJECTED_PHOTO_SIZE`, default 1920x1080) after
+  `VISAGE_REJECTED_PHOTO_DELAY_MS` (default 1000) of auto-exposure. The IR frame shows who
+  was judged; the colour photo shows the person and the scene as people see them, while
+  whoever tried is most likely still in front of the screen. It is taken in the background
+  and never delays the answer to PAM. Off by default; the webcam light turns on briefly.
+  Also `services.visage.rejectedFaces.photo.{camera,size,delayMs}` on NixOS.
+
+  `VISAGE_REJECTED_KEEP=0` keeps every rejected face. `VISAGE_REJECTED_GROUP_READABLE=1`
+  writes them `0640` so the owner can read them in place, through the group of a setgid
+  directory (`2750 root:<group>`, e.g. from systemd-tmpfiles); the sandboxed daemon has no
+  capability to change a file's group itself. Also `rejectedFaces.groupReadable` on NixOS.
+
+- **`VISAGE_FACE_WAIT_MS`: keep looking for a face instead of giving up after one burst.**
+  A verify starts the moment authentication is requested, which is often before the
+  user is in front of the camera: the lid is still opening, or the sensor is still
+  dark after resume. Until now that verify took one 3-frame burst, found no face and
+  failed, and the user got the password prompt while looking straight at the camera.
 
 - **A verify that sees only dark frames now logs why it might have.** One warning lists
   each rejected frame's sequence number and its mean and 99th-percentile brightness. On one

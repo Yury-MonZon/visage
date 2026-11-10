@@ -9,6 +9,7 @@ mod db;
 mod dbus_interface;
 mod engine;
 mod rate_limiter;
+mod rejected;
 mod store;
 
 use config::Config;

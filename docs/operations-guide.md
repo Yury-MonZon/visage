@@ -385,6 +385,12 @@ Environment=VARIABLE=value
 | `VISAGE_INFERENCE_DEVICE` | `cpu` | `gpu` runs the models through OpenVINO (see [GPU inference](#gpu-inference-optional)); falls back to `cpu` if unavailable |
 | `VISAGE_CPU_THREADS` | `2` | ONNX Runtime threads per model. Around the number of physical cores is a good start; `detect_ms` and `extract_ms` in the verify timing line show the effect |
 | `VISAGE_INFERENCE_CACHE_DIR` | `gpu-cache` beside the model dir | Compiled GPU kernels, so a daemon start does not recompile both models |
+| `VISAGE_REJECTED_DIR` | unset | Keep the face of every verify that saw a face and matched no one, as a grayscale PNG (dir `0700`, files `0600`, root). Must be under `/var/lib/visage` for the packaged service. Unset = keep nothing |
+| `VISAGE_REJECTED_KEEP` | `1024` | How many rejected faces to keep; the oldest are deleted. `0` keeps all |
+| `VISAGE_REJECTED_GROUP_READABLE` | `0` | `1` writes them `0640` instead of `0600`, for the directory's group. Create the directory setgid for that group first (`systemd-tmpfiles`: `d /var/lib/visage/rejected 2750 root <group> -`), since the sandboxed daemon cannot change a file's group |
+| `VISAGE_REJECTED_PHOTO_CAMERA` | unset | A colour webcam: with each rejected face also take a photo, `<name>_rgb.jpg` (the camera's own JPEG). Unset = no photo. Needs `VISAGE_REJECTED_DIR`; the webcam light turns on briefly |
+| `VISAGE_REJECTED_PHOTO_SIZE` | `1920x1080` | Photo size, an MJPEG size the camera offers |
+| `VISAGE_REJECTED_PHOTO_DELAY_MS` | `1000` | Streaming time before the photo, for auto-exposure |
 | `VISAGE_SESSION_BUS` | unset | Set to `1` to use session bus (development only) |
 
 ### Tuning the similarity threshold

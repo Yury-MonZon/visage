@@ -348,6 +348,7 @@ impl VisageService {
                         model_id: None,
                         model_label: None,
                     },
+                    rejected_frame: None,
                     best_quality: 0.0,
                 }
             }
@@ -358,12 +359,43 @@ impl VisageService {
         };
 
         // --- Record rate-limit outcome ---
-        {
+        let rejected_faces = {
             let mut state = self.state.lock().await;
             if result.result.matched {
                 state.rate_limiter.record_success(user);
             } else {
                 state.rate_limiter.record_failure(user);
+            }
+            state.config.rejected_faces.clone()
+        };
+
+        // --- Keep the rejected face, if configured ---
+        // Off the async runtime: PNG encoding and the directory scan are small
+        // but blocking. A failure is logged and never changes the answer.
+        if let (Some(store), Some(frame)) = (rejected_faces, result.rejected_frame.as_ref()) {
+            let frame = frame.clone();
+            let user_owned = user.to_string();
+            let similarity = result.result.similarity;
+            let saver = store.clone();
+            match tokio::task::spawn_blocking(move || saver.save(&frame, &user_owned, similarity))
+                .await
+            {
+                Ok(Ok(path)) => {
+                    tracing::warn!(user, path = %path.display(), "verify: rejected face saved");
+                    // The colour photo takes about a second (auto-exposure), so it is
+                    // not awaited: the verify answers PAM now, the photo follows.
+                    if store.photo.is_some() {
+                        tokio::task::spawn_blocking(move || match store.save_photo(&path) {
+                            Ok(Some(p)) => {
+                                tracing::warn!(path = %p.display(), "verify: colour photo saved")
+                            }
+                            Ok(None) => {}
+                            Err(e) => tracing::error!(error = %e, "verify: colour photo failed"),
+                        });
+                    }
+                }
+                Ok(Err(e)) => tracing::error!(error = %e, "verify: saving rejected face failed"),
+                Err(e) => tracing::error!(error = %e, "verify: saving rejected face panicked"),
             }
         }
 
@@ -400,6 +432,7 @@ impl VisageService {
             "liveness_min_displacement": state.config.liveness_min_displacement,
             "inference_device": format!("{:?}", state.config.inference.device).to_lowercase(),
             "cpu_threads": state.config.inference.cpu_threads,
+            "rejected_dir": state.config.rejected_faces.as_ref().map(|r| r.dir.display().to_string()),
             "session_bus": state.config.session_bus,
         })
         .to_string())
